@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from urllib.parse import quote, urlsplit
 
 from ..models import CategoryGroupConfig, ContentItem
+from ..obsidian_profiles import get_obsidian_daily_profile
 
 
 _CJK = r"[\u4e00-\u9fff\u3400-\u4dbf]"
@@ -153,8 +154,10 @@ class DailySummarizer:
         total_fetched: int,
         category_groups: Dict[str, CategoryGroupConfig],
         default_group: str = "other",
+        report_profile: str = "ai",
     ) -> str:
         """Generate a fixed-schema Chinese daily note for an Obsidian vault."""
+        profile = get_obsidian_daily_profile(report_profile)
         grouped_items: Dict[str, List[ContentItem]] = {
             key: [] for key in category_groups
         }
@@ -187,23 +190,22 @@ class DailySummarizer:
         status = "complete" if items else "no_significant_updates"
         lines = [
             "---",
-            "type: ai_daily_briefing",
+            f"type: {profile['note_type']}",
             f"date: {date}",
             f"status: {status}",
             "source: Horizon",
             f"total_fetched: {total_fetched}",
             f"selected_count: {len(items)}",
             "tags:",
-            "  - AI日报",
-            "  - 信息知识库",
+            *(f"  - {tag}" for tag in profile["tags"]),
             "---",
             "",
-            f"# {date} AI 信息日报",
+            f"# {date} {profile['note_suffix']}",
             "",
             "> [!summary] 今日概览",
-            f"> 今日共采集 {total_fetched} 条信息，筛选出 {len(items)} 条重点资讯。",
+            f"> 今日共采集 {total_fetched} 条{profile['summary_subject']}，筛选出 {len(items)} 条重点资讯。",
             "",
-            "- 日报索引：[[每日信息日报/00-日报索引|每日信息日报索引]]",
+            f"- 日报索引：[[{profile['folder_name']}/00-日报索引|{profile['index_title']}]]",
             "- 知识库索引：[[Wiki/index|知识库索引]]",
             "",
             "## 分类概览",
@@ -228,8 +230,8 @@ class DailySummarizer:
                 "",
                 "## 知识库处理",
                 "",
-                "- [ ] 将值得长期跟踪的结论沉淀到 [[Wiki/index|知识库]]",
-                "- [ ] 对社区观点或未验证信息进行交叉验证",
+                f"- [ ] {profile['knowledge_task']}",
+                f"- [ ] {profile['verification_task']}",
                 "",
                 "## 运行说明",
                 "",

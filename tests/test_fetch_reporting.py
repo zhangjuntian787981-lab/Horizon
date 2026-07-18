@@ -141,7 +141,13 @@ def test_native_run_raises_when_every_attempted_source_failed(monkeypatch) -> No
     send_failure.assert_awaited_once()
 
 
-def test_native_run_writes_empty_daily_outputs(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("report_profile", "folder_name"),
+    [("ai", "每日信息日报"), ("ecommerce", "每日电商运营日报")],
+)
+def test_native_run_writes_empty_daily_outputs(
+    monkeypatch, tmp_path, report_profile, folder_name
+) -> None:
     orchestrator = make_orchestrator()
     orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
         email=None,
@@ -155,7 +161,7 @@ def test_native_run_writes_empty_daily_outputs(monkeypatch, tmp_path) -> None:
     orchestrator.email_manager = None
     orchestrator.webhook_notifier = None
     summary_path = tmp_path / "summary.md"
-    obsidian_path = tmp_path / "每日信息日报" / "daily.md"
+    obsidian_path = tmp_path / folder_name / "daily.md"
     orchestrator.storage = SimpleNamespace(  # type: ignore[assignment]
         save_daily_summary=Mock(return_value=summary_path),
         save_obsidian_daily_note=Mock(return_value=obsidian_path),
@@ -170,16 +176,18 @@ def test_native_run_writes_empty_daily_outputs(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(orchestrator, "fetch_all_sources", fetch_all_sources)
     monkeypatch.setenv(
         "HORIZON_OBSIDIAN_OUTPUT_DIR",
-        str(tmp_path / "每日信息日报"),
+        str(tmp_path / folder_name),
     )
+    monkeypatch.setenv("HORIZON_OBSIDIAN_PROFILE", report_profile)
     monkeypatch.chdir(tmp_path)
 
     asyncio.run(orchestrator.run())
 
     orchestrator.storage.save_daily_summary.assert_called_once()
     obsidian_call = orchestrator.storage.save_obsidian_daily_note.call_args
-    assert obsidian_call.args[0] == str(tmp_path / "每日信息日报")
+    assert obsidian_call.args[0] == str(tmp_path / folder_name)
     assert "status: no_significant_updates" in obsidian_call.args[2]
+    assert obsidian_call.args[3] == report_profile
     assert list((tmp_path / "docs" / "_posts").glob("*-summary-zh.md"))
 
 

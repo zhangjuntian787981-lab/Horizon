@@ -1,0 +1,100 @@
+name: Daily Horizon Ecommerce Summary
+
+on:
+  schedule:
+    - cron: '37 7 * * *'
+      timezone: 'Asia/Shanghai'
+    - cron: '7 10 * * *'
+      timezone: 'Asia/Shanghai'
+  workflow_dispatch:
+
+concurrency:
+  group: horizon-daily-summary
+  cancel-in-progress: false
+
+jobs:
+  daily-ecommerce-summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Shanghai
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Horizon
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Check whether today's ecommerce summary already exists
+        id: daily_guard
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          SUMMARY_DATE="$(TZ=Asia/Shanghai date +'%Y-%m-%d')"
+          GUARD_DIR="$RUNNER_TEMP/horizon-ecommerce-daily-guard"
+          git clone --quiet --depth=1 \
+            https://github.com/zhangjuntian787981-lab/Horizon-Ecommerce-Daily.git \
+            "$GUARD_DIR"
+          if [[ -f "$GUARD_DIR/${SUMMARY_DATE} 电商运营日报.md" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Ecommerce daily note ${SUMMARY_DATE} already exists; skipping."
+          fi
+
+      - name: Set up Python
+        if: steps.daily_guard.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        if: steps.daily_guard.outputs.skip != 'true'
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.26"
+
+      - name: Install dependencies
+        if: steps.daily_guard.outputs.skip != 'true'
+        run: uv sync
+
+      - name: Prepare ecommerce config
+        if: steps.daily_guard.outputs.skip != 'true'
+        run: cp data/config.ecommerce.github.json data/config.json
+
+      - name: Run Horizon ecommerce collection
+        if: steps.daily_guard.outputs.skip != 'true'
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          HORIZON_OBSIDIAN_OUTPUT_DIR: ${{ runner.temp }}/obsidian-ecommerce-output
+          HORIZON_OBSIDIAN_PROFILE: ecommerce
+        run: uv run horizon --hours 24
+
+      - name: Set current date as environment variable
+        if: steps.daily_guard.outputs.skip != 'true'
+        run: echo "DATE=$(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
+
+      - name: Checkout Obsidian ecommerce daily repository for publish
+        if: steps.daily_guard.outputs.skip != 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: zhangjuntian787981-lab/Horizon-Ecommerce-Daily
+          path: obsidian-ecommerce-daily
+          ssh-key: ${{ secrets.OBSIDIAN_ECOMMERCE_DAILY_DEPLOY_KEY }}
+
+      - name: Commit Obsidian ecommerce daily note
+        if: steps.daily_guard.outputs.skip != 'true'
+        run: |
+          cp \
+            "$RUNNER_TEMP/obsidian-ecommerce-output/${DATE} 电商运营日报.md" \
+            "obsidian-ecommerce-daily/${DATE} 电商运营日报.md"
+          uv run python -c \
+            'from pathlib import Path; from src.storage.manager import StorageManager; StorageManager._save_obsidian_daily_index(Path("obsidian-ecommerce-daily"), "ecommerce")'
+          git -C obsidian-ecommerce-daily config user.name "github-actions[bot]"
+          git -C obsidian-ecommerce-daily config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C obsidian-ecommerce-daily add -- "${DATE} 电商运营日报.md" "00-日报索引.md"
+          if git -C obsidian-ecommerce-daily diff --cached --quiet; then
+            echo "No Obsidian ecommerce daily note changes to commit."
+          else
+            git -C obsidian-ecommerce-daily commit -m "Daily ecommerce briefing: ${DATE}"
+            git -C obsidian-ecommerce-daily push origin main
+          fi

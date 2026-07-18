@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from .._file_utils import _atomic_write_text
 from ..models import Config
+from ..obsidian_profiles import get_obsidian_daily_profile
 
 
 # Matches ${VAR_NAME} in string config values. Names follow env-var rules
@@ -132,37 +133,41 @@ class StorageManager:
         output_dir: str,
         date: str,
         markdown: str,
+        report_profile: str = "ai",
     ) -> Path:
         """Save one dated Obsidian note and refresh its Markdown index."""
+        profile = get_obsidian_daily_profile(report_profile)
         root = Path(output_dir).expanduser()
         root.mkdir(parents=True, exist_ok=True)
-        filepath = safe_output_path(root, f"{date} AI 信息日报.md")
+        filepath = safe_output_path(root, f"{date} {profile['note_suffix']}.md")
         _atomic_write_text(filepath, markdown)
-        self._save_obsidian_daily_index(root)
+        self._save_obsidian_daily_index(root, report_profile)
         return filepath
 
     @staticmethod
-    def _save_obsidian_daily_index(root: Path) -> None:
-        report_name = re.compile(r"^\d{4}-\d{2}-\d{2} AI 信息日报\.md$")
+    def _save_obsidian_daily_index(root: Path, report_profile: str = "ai") -> None:
+        profile = get_obsidian_daily_profile(report_profile)
+        report_name = re.compile(
+            rf"^\d{{4}}-\d{{2}}-\d{{2}} {re.escape(profile['note_suffix'])}\.md$"
+        )
         reports = sorted(
             (path for path in root.glob("*.md") if report_name.fullmatch(path.name)),
             reverse=True,
         )
         report_links = [
-            f"- [[每日信息日报/{path.stem}|{path.name[:10]}]]"
+            f"- [[{profile['folder_name']}/{path.stem}|{path.name[:10]}]]"
             for path in reports
         ]
         index = "\n".join(
             [
                 "---",
-                "type: ai_daily_index",
+                f"type: {profile['index_type']}",
                 "source: Horizon",
                 "tags:",
-                "  - AI日报",
-                "  - 信息知识库",
+                *(f"  - {tag}" for tag in profile["tags"]),
                 "---",
                 "",
-                "# 每日信息日报索引",
+                f"# {profile['index_title']}",
                 "",
                 "> 本目录由 Horizon 自动更新。每篇日报使用同一模板，并按日期倒序排列。",
                 "",

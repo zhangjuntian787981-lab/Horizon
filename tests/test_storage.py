@@ -3,7 +3,7 @@ import pytest
 from pathlib import Path
 import src._file_utils as file_utils
 from src.storage.manager import StorageManager, ConfigError, _expand_env_vars, safe_output_path
-from src.models import AIConfig
+from src.models import AIConfig, Config
 from pydantic import ValidationError
 
 def test_load_config_missing_file(tmp_path):
@@ -196,6 +196,45 @@ def test_save_obsidian_daily_note_updates_index_without_duplicates(tmp_path):
     assert latest.read_text(encoding="utf-8") == "updated"
     assert index.count("2026-07-19") == 2
     assert index.index("2026-07-19") < index.index("2026-07-18")
+
+
+def test_save_ecommerce_daily_note_updates_its_own_index(tmp_path):
+    storage = StorageManager(data_dir=str(tmp_path / "data"))
+    output_dir = tmp_path / "每日电商运营日报"
+
+    first = storage.save_obsidian_daily_note(
+        str(output_dir),
+        "2026-07-18",
+        "first",
+        "ecommerce",
+    )
+    latest = storage.save_obsidian_daily_note(
+        str(output_dir),
+        "2026-07-19",
+        "latest",
+        "ecommerce",
+    )
+
+    index = (output_dir / "00-日报索引.md").read_text(encoding="utf-8")
+    assert first.name == "2026-07-18 电商运营日报.md"
+    assert latest.name == "2026-07-19 电商运营日报.md"
+    assert "type: ecommerce_daily_index" in index
+    assert "# 每日电商运营日报索引" in index
+    assert "[[每日电商运营日报/2026-07-19 电商运营日报|2026-07-19]]" in index
+    assert index.index("2026-07-19") < index.index("2026-07-18")
+
+
+def test_ecommerce_github_config_is_valid():
+    config_data = json.loads(
+        Path("data/config.ecommerce.github.json").read_text(encoding="utf-8")
+    )
+
+    config = Config.model_validate(config_data)
+
+    assert config.ai.provider == "deepseek"
+    assert config.ai.curation_focus
+    assert config.filtering.max_items == 8
+    assert config.sources.twitter is None
 
 
 def test_save_subscribers_replace_failure_preserves_destination(tmp_path, monkeypatch):

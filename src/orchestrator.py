@@ -288,17 +288,20 @@ class HorizonOrchestrator:
 
                 obsidian_output_dir = os.getenv("HORIZON_OBSIDIAN_OUTPUT_DIR")
                 if lang == "zh" and obsidian_output_dir:
+                    report_profile = os.getenv("HORIZON_OBSIDIAN_PROFILE", "ai")
                     obsidian_note = summarizer.generate_obsidian_note(
                         important_items,
                         today,
                         len(all_items),
                         self.config.filtering.category_groups,
                         self.config.filtering.default_group,
+                        report_profile,
                     )
                     obsidian_path = self.storage.save_obsidian_daily_note(
                         obsidian_output_dir,
                         today,
                         obsidian_note,
+                        report_profile,
                     )
                     self.console.print(
                         f"📔 Saved Obsidian daily note to: {obsidian_path}\n"
@@ -903,7 +906,7 @@ class HorizonOrchestrator:
 
         self.console.print("📚 Enriching with background knowledge...")
         ai_client = self._get_ai_client()
-        enricher = ContentEnricher(ai_client)
+        enricher = ContentEnricher(ai_client, self.config.ai.curation_focus)
         await enricher.enrich_batch(items)
         self.console.print(f"   Enriched {len(items)} items\n")
 
@@ -919,7 +922,7 @@ class HorizonOrchestrator:
         self.console.print("🤖 Analyzing content with AI...")
 
         ai_client = self._get_ai_client()
-        analyzer = ContentAnalyzer(ai_client)
+        analyzer = ContentAnalyzer(ai_client, self.config.ai.curation_focus)
 
         return await analyzer.analyze_batch(items)
 

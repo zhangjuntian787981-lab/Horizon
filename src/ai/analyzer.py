@@ -28,8 +28,9 @@ class AnalysisResult(BaseModel):
 class ContentAnalyzer:
     """Analyzes content items using AI to determine importance."""
 
-    def __init__(self, ai_client: AIClient):
+    def __init__(self, ai_client: AIClient, curation_focus: Optional[str] = None):
         self.client = ai_client
+        self.curation_focus = curation_focus.strip() if curation_focus else None
 
     @staticmethod
     def _parse_json_response(response: str) -> Optional[dict]:
@@ -150,8 +151,16 @@ class ContentAnalyzer:
         )
 
         # Get AI completion
+        system_prompt = CONTENT_ANALYSIS_SYSTEM
+        if self.curation_focus:
+            system_prompt += (
+                "\n\nCollection focus:\n"
+                f"{self.curation_focus}\n"
+                "Score content outside this focus as low priority."
+            )
+
         response = await self.client.complete(
-            system=CONTENT_ANALYSIS_SYSTEM,
+            system=system_prompt,
             user=user_prompt,
         )
 
