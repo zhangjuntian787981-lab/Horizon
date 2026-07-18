@@ -580,6 +580,7 @@ class ChainedAIClient(AIClient):
         self.configs = configs
         self._client_factory = client_factory or _create_single_client
         self._client_cache: Dict[int, AIClient] = {}
+        self._disabled_provider_indexes: set[int] = set()
         # Allow tests to inject pre-built clients directly
         if clients is not None:
             for idx, client in enumerate(clients):
@@ -599,6 +600,8 @@ class ChainedAIClient(AIClient):
     ) -> str:
         last_error: Optional[Exception] = None
         for i in range(len(self.configs)):
+            if i in self._disabled_provider_indexes:
+                continue
             try:
                 client = self._get_client(i)
                 result = await client.complete(system, user, temperature, max_tokens)
@@ -609,16 +612,31 @@ class ChainedAIClient(AIClient):
                 if not self._should_fallback(exc):
                     raise
                 last_error = exc
+                if self._is_balance_exhausted(exc):
+                    self._disabled_provider_indexes.add(i)
                 if i < len(self.configs) - 1:
-                    rich_print(
-                        f"\n[yellow]Provider {self.configs[i].provider.value} failed ({exc}), "
-                        f"falling back to {self.configs[i + 1].provider.value}...[/yellow]"
-                    )
+                    next_provider = self.configs[i + 1].provider.value
+                    if (
+                        self.configs[i].provider == AIProvider.DEEPSEEK
+                        and self._is_balance_exhausted(exc)
+                    ):
+                        rich_print(
+                            f"\n[bold yellow]⚠️ DeepSeek 余额不足，已自动切换到 "
+                            f"{next_provider}。充值后，下次运行会重新使用 DeepSeek。"
+                            f"[/bold yellow]"
+                        )
+                    else:
+                        rich_print(
+                            f"\n[yellow]Provider {self.configs[i].provider.value} failed ({exc}), "
+                            f"falling back to {next_provider}...[/yellow]"
+                        )
         raise RuntimeError(f"All providers failed. Last error: {last_error}")
 
     @staticmethod
     def _should_fallback(exc: Exception) -> bool:
         """Determine if an error warrants fallback to the next provider."""
+        if ChainedAIClient._is_balance_exhausted(exc):
+            return True
         msg = str(exc).lower()
         if "429" in msg or "rate limit" in msg:
             return True
@@ -626,9 +644,37 @@ class ChainedAIClient(AIClient):
             return True
         if "502" in msg or "503" in msg or "service unavailable" in msg:
             return True
+        if "missing api key" in msg:
+            return True
+        if any(
+            marker in msg
+            for marker in (
+                "connection error",
+                "connection refused",
+                "connection failed",
+                "connection attempts failed",
+                "failed to connect",
+                "timeout",
+                "timed out",
+            )
+        ):
+            return True
+        if "404" in msg or "model not found" in msg:
+            return True
         if "empty response" in msg:
             return True
         return False
+
+    @staticmethod
+    def _is_balance_exhausted(exc: Exception) -> bool:
+        """Return whether a provider rejected the request for insufficient balance."""
+        if getattr(exc, "status_code", None) == 402:
+            return True
+        msg = str(exc).lower()
+        return any(
+            marker in msg
+            for marker in ("402", "insufficient balance", "余额不足")
+        )
 
 
 def _create_chained_client(config: AIConfig) -> ChainedAIClient:
@@ -647,10 +693,19 @@ def _create_chained_client(config: AIConfig) -> ChainedAIClient:
 
         defaults = AI_PROVIDER_DEFAULTS.get(provider, {})
         base_url = config.base_url if provider == config.provider else defaults.get("base_url")
+        model = config.provider_models.get(
+            provider,
+            config.model if provider == config.provider else defaults.get("model", config.model),
+        )
+        api_key_env = (
+            config.api_key_env
+            if provider == config.provider
+            else defaults.get("api_key_env", config.api_key_env)
+        )
         cfg = AIConfig(
             provider=provider,
-            model=defaults.get("model", config.model),
-            api_key_env=defaults.get("api_key_env", config.api_key_env),
+            model=model,
+            api_key_env=api_key_env,
             base_url=base_url,
             temperature=config.temperature,
             max_tokens=config.max_tokens,

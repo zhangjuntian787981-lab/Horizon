@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.ai.client import ChainedAIClient, _create_chained_client
+from src.ai.client import ChainedAIClient, _create_chained_client, _create_single_client
 from src.models import AIConfig, AIProvider, AI_PROVIDER_DEFAULTS
 
 
@@ -37,6 +37,12 @@ class _MockFactory:
         client = self.clients[self.idx]
         self.idx += 1
         return client
+
+
+class _StatusError(Exception):
+    def __init__(self, status_code, message="provider error"):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _make_config(provider: AIProvider, model: str = "m", api_key_env: str = "K") -> AIConfig:
@@ -139,8 +145,37 @@ def test_should_fallback_detects_retryable_errors():
     assert ChainedAIClient._should_fallback(Exception("quota exceeded")) is True
     assert ChainedAIClient._should_fallback(Exception("502 bad gateway")) is True
     assert ChainedAIClient._should_fallback(Exception("503 service unavailable")) is True
+    assert ChainedAIClient._should_fallback(Exception("Missing API key")) is True
+    assert ChainedAIClient._should_fallback(Exception("Connection error.")) is True
+    assert ChainedAIClient._should_fallback(Exception("Connection refused")) is True
+    assert ChainedAIClient._should_fallback(Exception("Request timeout")) is True
+    assert ChainedAIClient._should_fallback(Exception("Request timed out")) is True
+    assert ChainedAIClient._should_fallback(Exception("404 model not found")) is True
+    assert ChainedAIClient._should_fallback(_StatusError(402)) is True
+    assert ChainedAIClient._should_fallback(Exception("Insufficient Balance")) is True
+    assert ChainedAIClient._should_fallback(Exception("余额不足")) is True
     assert ChainedAIClient._should_fallback(Exception("Empty response from provider")) is True
     assert ChainedAIClient._should_fallback(Exception("some random error")) is False
+
+
+def test_deepseek_balance_exhaustion_warns_and_disables_provider(capsys):
+    deepseek = _make_config(AIProvider.DEEPSEEK)
+    ollama = _make_config(AIProvider.OLLAMA)
+    deepseek_client = _DummyClient(exc=_StatusError(402))
+    ollama_client = _DummyClient(result="fallback ok")
+    chained = ChainedAIClient(
+        [deepseek, ollama],
+        clients=[deepseek_client, ollama_client],
+    )
+
+    assert asyncio.run(chained.complete("sys", "usr")) == "fallback ok"
+    assert asyncio.run(chained.complete("sys", "usr")) == "fallback ok"
+
+    assert len(deepseek_client.calls) == 1
+    assert len(ollama_client.calls) == 2
+    output = capsys.readouterr().out
+    assert "DeepSeek 余额不足" in output
+    assert "ollama" in output
 
 
 def test_lazy_initialization():
@@ -176,7 +211,7 @@ def test_create_chained_client_parses_chain():
 
 
 def test_create_chained_client_uses_provider_defaults_without_leaking_base_url():
-    """Every heterogeneous entry gets its own connection defaults."""
+    """Primary settings are preserved while fallbacks use their own defaults."""
     providers = list(AIProvider)
     config = AIConfig(
         provider=AIProvider.OPENAI,
@@ -197,8 +232,18 @@ def test_create_chained_client_uses_provider_defaults_without_leaking_base_url()
     assert [entry.provider for entry in chained.configs] == providers
     for entry in chained.configs:
         defaults = AI_PROVIDER_DEFAULTS[entry.provider]
-        assert entry.model == defaults["model"]
-        assert entry.api_key_env == defaults["api_key_env"]
+        expected_model = (
+            config.model
+            if entry.provider == config.provider
+            else defaults["model"]
+        )
+        expected_api_key_env = (
+            config.api_key_env
+            if entry.provider == config.provider
+            else defaults["api_key_env"]
+        )
+        assert entry.model == expected_model
+        assert entry.api_key_env == expected_api_key_env
         expected_base_url = (
             config.base_url
             if entry.provider == config.provider
@@ -211,6 +256,71 @@ def test_create_chained_client_uses_provider_defaults_without_leaking_base_url()
         assert entry.analysis_concurrency == config.analysis_concurrency
         assert entry.enrichment_concurrency == config.enrichment_concurrency
         assert entry.languages == config.languages
+
+
+def test_create_chained_client_applies_provider_model_overrides():
+    config = AIConfig(
+        provider=AIProvider.GEMINI,
+        provider_chain="gemini,ollama,openai,deepseek",
+        provider_models={
+            "gemini": "gemini-current",
+            "ollama": "ollama-current",
+            "openai": "openai-current",
+            "deepseek": "deepseek-current",
+        },
+        model="explicit-primary-model",
+        api_key_env="CUSTOM_GOOGLE_API_KEY",
+    )
+
+    chained = _create_chained_client(config)
+
+    assert {
+        entry.provider: entry.model for entry in chained.configs
+    } == config.provider_models
+    assert chained.configs[0].api_key_env == "CUSTOM_GOOGLE_API_KEY"
+
+
+def test_missing_key_skips_provider_and_continues(monkeypatch):
+    monkeypatch.delenv("TEST_MISSING_GEMINI_KEY", raising=False)
+    first = _make_config(AIProvider.OPENAI)
+    missing_key = _make_config(
+        AIProvider.GEMINI,
+        api_key_env="TEST_MISSING_GEMINI_KEY",
+    )
+    last = _make_config(AIProvider.DEEPSEEK)
+    first_client = _DummyClient(exc=Exception("429 rate limit"))
+    last_client = _DummyClient(result="fallback ok")
+
+    def factory(cfg):
+        if cfg.provider == AIProvider.OPENAI:
+            return first_client
+        if cfg.provider == AIProvider.GEMINI:
+            return _create_single_client(cfg)
+        return last_client
+
+    chained = ChainedAIClient([first, missing_key, last], client_factory=factory)
+    result = asyncio.run(chained.complete("sys", "usr"))
+
+    assert result == "fallback ok"
+    assert len(first_client.calls) == 1
+    assert len(last_client.calls) == 1
+
+
+def test_ollama_connection_error_falls_back_to_next_provider():
+    ollama = _make_config(AIProvider.OLLAMA)
+    openai = _make_config(AIProvider.OPENAI)
+    ollama_client = _DummyClient(exc=Exception("Connection error."))
+    openai_client = _DummyClient(result="fallback ok")
+
+    chained = ChainedAIClient(
+        [ollama, openai],
+        clients=[ollama_client, openai_client],
+    )
+    result = asyncio.run(chained.complete("sys", "usr"))
+
+    assert result == "fallback ok"
+    assert len(ollama_client.calls) == 1
+    assert len(openai_client.calls) == 1
 
 
 def test_create_chained_client_preserves_custom_azure_and_common_settings():

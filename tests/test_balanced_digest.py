@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +15,21 @@ from src.models import (
     SourceType,
     SourcesConfig,
 )
-from src.orchestrator import HorizonOrchestrator
+from src.orchestrator import HorizonOrchestrator, _summary_date
+
+
+def test_summary_date_uses_local_calendar_date() -> None:
+    local_now = datetime(
+        2026,
+        7,
+        19,
+        0,
+        30,
+        tzinfo=timezone(timedelta(hours=8)),
+    )
+
+    assert local_now.astimezone(timezone.utc).strftime("%Y-%m-%d") == "2026-07-18"
+    assert _summary_date(local_now) == "2026-07-19"
 
 
 def make_item(item_id: str, score: float, category: str | None) -> ContentItem:
@@ -188,6 +202,31 @@ def test_run_applies_balanced_digest_before_enrichment(tmp_path, monkeypatch) ->
     asyncio.run(orchestrator.run())
 
     assert enriched_ids == ["ai"]
+
+
+def test_orchestrator_reuses_ai_client(monkeypatch) -> None:
+    config = Config(
+        ai=AIConfig(
+            provider="ollama",
+            model="qwen3:8b",
+            api_key_env="",
+        ),
+        sources=SourcesConfig(),
+        filtering=FilteringConfig(),
+    )
+    orchestrator = HorizonOrchestrator(config, SimpleNamespace())
+    client = object()
+    calls = []
+
+    def factory(ai_config):  # type: ignore[no-untyped-def]
+        calls.append(ai_config)
+        return client
+
+    monkeypatch.setattr("src.orchestrator.create_ai_client", factory)
+
+    assert orchestrator._get_ai_client() is client
+    assert orchestrator._get_ai_client() is client
+    assert calls == [config.ai]
 
 
 def test_run_balances_after_twitter_reanalysis(tmp_path, monkeypatch) -> None:

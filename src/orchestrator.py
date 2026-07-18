@@ -24,11 +24,17 @@ from .scrapers.openbb import OpenBBScraper
 from .scrapers.ossinsight import OSSInsightScraper
 from .scrapers.gdelt import GDELTScraper
 from .scrapers.google_news import GoogleNewsScraper
-from .ai.client import create_ai_client
+from .ai.client import AIClient, create_ai_client
 from .ai.analyzer import ContentAnalyzer
 from .ai.summarizer import DailySummarizer
 from .ai.enricher import ContentEnricher
 from .ai.tokens import get_usage_snapshot
+
+
+def _summary_date(now: Optional[datetime] = None) -> str:
+    """Return the local calendar date used for user-facing daily outputs."""
+    current = now or datetime.now().astimezone()
+    return current.strftime("%Y-%m-%d")
 
 
 _TRACKING_QUERY_PARAMETERS = {
@@ -180,7 +186,14 @@ class HorizonOrchestrator:
             if config.webhook and config.webhook.enabled
             else None
         )
+        self._ai_client: Optional[AIClient] = None
         self.last_fetch_report: Optional[FetchReport] = None
+
+    def _get_ai_client(self) -> AIClient:
+        """Return the shared AI client for this pipeline run."""
+        if self._ai_client is None:
+            self._ai_client = create_ai_client(self.config.ai)
+        return self._ai_client
 
     async def run(self, force_hours: int = None) -> None:
         """Execute the complete workflow.
@@ -254,7 +267,7 @@ class HorizonOrchestrator:
             await self._enrich_important_items(important_items)
 
             # 7. Generate and save daily summaries for each configured language
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today = _summary_date()
             for lang in self.config.ai.languages:
                 summarizer = DailySummarizer()
                 summary = await summarizer.generate_summary(important_items, today, len(all_items), language=lang)
@@ -338,7 +351,7 @@ class HorizonOrchestrator:
             # Send webhook failure notification if configured
             if self.webhook_notifier:
                 await self.webhook_notifier.send_failure(
-                    date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    date=_summary_date(),
                     error_message=str(e),
                 )
 
@@ -583,7 +596,7 @@ class HorizonOrchestrator:
         items_text = "\n\n".join(lines)
 
         try:
-            ai_client = create_ai_client(self.config.ai)
+            ai_client = self._get_ai_client()
             response = await ai_client.complete(
                 system=TOPIC_DEDUP_SYSTEM,
                 user=TOPIC_DEDUP_USER.format(items=items_text),
@@ -844,7 +857,7 @@ class HorizonOrchestrator:
         self.console.print(
             f"   Re-analyzing {len(expanded)} Twitter items with reply context...\n"
         )
-        ai_client = create_ai_client(self.config.ai)
+        ai_client = self._get_ai_client()
         analyzer = ContentAnalyzer(ai_client)
         await analyzer.analyze_batch(expanded)
 
@@ -861,7 +874,7 @@ class HorizonOrchestrator:
             return
 
         self.console.print("📚 Enriching with background knowledge...")
-        ai_client = create_ai_client(self.config.ai)
+        ai_client = self._get_ai_client()
         enricher = ContentEnricher(ai_client)
         await enricher.enrich_batch(items)
         self.console.print(f"   Enriched {len(items)} items\n")
@@ -877,7 +890,7 @@ class HorizonOrchestrator:
         """
         self.console.print("🤖 Analyzing content with AI...")
 
-        ai_client = create_ai_client(self.config.ai)
+        ai_client = self._get_ai_client()
         analyzer = ContentAnalyzer(ai_client)
 
         return await analyzer.analyze_batch(items)

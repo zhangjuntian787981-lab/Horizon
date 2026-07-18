@@ -55,7 +55,10 @@ class TwitterScraper(BaseScraper):
 
         raw_items = await self._fetch_dataset(token, dataset_id)
         items = []
+        fetch_limit = max(0, self.config.fetch_limit)
         for raw in raw_items:
+            if len(items) >= fetch_limit:
+                break
             if isinstance(raw, dict) and raw.get("noResults"):
                 continue
             parsed = self._parse_item(raw, since)
@@ -282,7 +285,7 @@ class TwitterScraper(BaseScraper):
                 if permalink and screen_name != "unknown":
                     url = f"https://twitter.com/{screen_name}{permalink}"
                 else:
-                    url = f"https://twitter.com/{screen_name}/status/{tweet_id}"
+                    url = f"https://twitter.com/{screen_name}/status/{numeric_id}"
 
             title_body = text[:50].replace("\n", " ").strip()
             if len(text) > 50:

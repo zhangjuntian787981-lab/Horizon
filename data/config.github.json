@@ -2,51 +2,90 @@
   "version": "1.0",
   "ai": {
     "provider": "deepseek",
+    "provider_chain": "deepseek,gemini",
+    "provider_models": {
+      "deepseek": "deepseek-v4-flash",
+      "gemini": "gemini-3.5-flash"
+    },
     "model": "deepseek-v4-flash",
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "temperature": 0.3,
-    "max_tokens": 8192,
-    "throttle_sec": 1,
-    "languages": [
-      "zh",
-      "en"
-    ],
-    "analysis_concurrency": 5,
-    "enrichment_concurrency": 5
+    "temperature": 0.2,
+    "max_tokens": 4096,
+    "throttle_sec": 4.5,
+    "analysis_concurrency": 1,
+    "enrichment_concurrency": 1,
+    "languages": ["zh"]
   },
   "sources": {
     "github": [
       {
         "type": "user_events",
         "username": "karpathy",
-        "enabled": true
+        "enabled": true,
+        "category": "ai-research"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "openai",
+        "repo": "openai-agents-python",
+        "enabled": true,
+        "category": "ai-agents"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "google-gemini",
+        "repo": "gemini-cli",
+        "enabled": true,
+        "category": "ai-agents"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "ollama",
+        "repo": "ollama",
+        "enabled": true,
+        "category": "local-ai"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "huggingface",
+        "repo": "transformers",
+        "enabled": true,
+        "category": "ai-open-source"
       },
       {
         "type": "repo_releases",
         "owner": "vllm-project",
         "repo": "vllm",
-        "enabled": true
-      },
-      {
-        "type": "repo_releases",
-        "owner": "sgl-project",
-        "repo": "sglang",
-        "enabled": true
-      },
-      {
-        "type": "repo_releases",
-        "owner": "triton-lang",
-        "repo": "triton",
-        "enabled": true
+        "enabled": false,
+        "category": "ai-inference"
       }
     ],
     "hackernews": {
       "enabled": true,
-      "fetch_top_stories": 30,
-      "min_score": 150
+      "fetch_top_stories": 15,
+      "min_score": 100,
+      "category": "tech-community"
     },
     "rss": [
+      {
+        "name": "OpenAI News",
+        "url": "https://openai.com/news/rss.xml",
+        "enabled": true,
+        "category": "official-ai"
+      },
+      {
+        "name": "Google DeepMind",
+        "url": "https://deepmind.google/blog/rss.xml",
+        "enabled": true,
+        "category": "official-ai"
+      },
+      {
+        "name": "Hugging Face Blog",
+        "url": "https://huggingface.co/blog/feed.xml",
+        "enabled": true,
+        "category": "ai-builders"
+      },
       {
         "name": "Simon Willison",
         "url": "https://simonwillison.net/atom/everything/",
@@ -54,97 +93,94 @@
         "category": "ai-tools"
       },
       {
-        "name": "GitHub Trending - Daily",
-        "url": "https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml",
+        "name": "Chip Huyen",
+        "url": "https://huyenchip.com/feed.xml",
         "enabled": true,
-        "category": "github-trending"
+        "category": "ai-engineering"
       },
       {
-        "name": "Semianalysis",
-        "url": "https://newsletter.semianalysis.com/feed",
+        "name": "arXiv AI Agents",
+        "url": "https://export.arxiv.org/api/query?search_query=%28cat%3Acs.AI+OR+cat%3Acs.CL%29+AND+%28all%3Aagent+OR+all%3ALLM+OR+all%3Amultimodal%29&start=0&max_results=5&sortBy=submittedDate&sortOrder=descending",
         "enabled": true,
-        "category": "semiconductors"
+        "category": "ai-research-paper"
       },
       {
-        "name": "LWN.net",
-        "url": "https://lwn.net/headlines/full_text?key=${LWN_KEY}",
+        "name": "n8n AI",
+        "url": "https://blog.n8n.io/tag/ai/rss/",
         "enabled": true,
-        "category": "linux-kernel"
+        "category": "ai-cases"
       }
     ],
     "reddit": {
-      "enabled": true,
-      "subreddits": [
-        {
-          "subreddit": "MachineLearning",
-          "enabled": true,
-          "sort": "hot",
-          "time_filter": "day",
-          "fetch_limit": 10,
-          "min_score": 60
-        },
-        {
-          "subreddit": "LocalLLaMA",
-          "enabled": true,
-          "sort": "hot",
-          "time_filter": "day",
-          "fetch_limit": 10,
-          "min_score": 60
-        }
-      ],
+      "enabled": false,
+      "subreddits": [],
       "users": [],
-      "fetch_comments": 10
+      "fetch_comments": 0
     },
     "telegram": {
+      "enabled": false,
+      "channels": []
+    },
+    "twitter": {
       "enabled": true,
-      "channels": [
-        {
-          "channel": "zaihuapd",
-          "enabled": true,
-          "fetch_limit": 20
-        }
-      ]
+      "mode": "apify",
+      "users": ["karpathy", "fchollet", "simonw", "deepseek_ai"],
+      "fetch_limit": 12,
+      "category": "ai-signal",
+      "fetch_reply_text": false,
+      "max_replies_per_tweet": 3,
+      "max_tweets_to_expand": 2,
+      "reply_min_likes": 10,
+      "apify_token_env": "APIFY_TOKEN",
+      "actor_id": "altimis~scweet"
+    },
+    "ossinsight": {
+      "enabled": true,
+      "period": "past_24_hours",
+      "languages": ["All"],
+      "keywords": [
+        "llm",
+        "agent",
+        "mcp",
+        "rag",
+        "multimodal",
+        "inference",
+        "transformer",
+        "codex",
+        "claude"
+      ],
+      "min_stars": 3,
+      "max_items": 5,
+      "category": "ai-discovery"
     }
   },
   "filtering": {
-    "ai_score_threshold": 8.0,
-    "time_window_hours": 24
-  },
-  "webhook": {
-    "enabled": true,
-    "url_env": "HORIZON_WEBHOOK_URL",
-    "delivery": "summary_and_items",
-    "overview_position": "last",
-    "platform": "feishu",
-    "layout": "collapsible",
-    "fallback_layout": "markdown",
-    "languages": [
-      "zh"
-    ],
-    "request_body": {
-      "msg_type": "interactive",
-      "card": {
-        "schema": "2.0",
-        "config": {
-          "wide_screen_mode": true
-        },
-        "header": {
-          "title": {
-            "tag": "plain_text",
-            "content": "#{message_title}"
-          },
-          "template": "blue"
-        },
-        "body": {
-          "elements": [
-            {
-              "tag": "markdown",
-              "content": "#{summary}"
-            }
-          ]
-        }
+    "ai_score_threshold": 7.0,
+    "time_window_hours": 24,
+    "max_items": 10,
+    "category_groups": {
+      "official": {
+        "name": "官方 AI 动态",
+        "limit": 2,
+        "categories": ["official-ai"]
+      },
+      "research": {
+        "name": "研究与前沿信号",
+        "limit": 2,
+        "categories": ["ai-research", "ai-research-paper", "ai-signal", "tech-community"]
+      },
+      "practice": {
+        "name": "实践案例",
+        "limit": 3,
+        "categories": ["ai-cases", "ai-builders", "ai-tools", "ai-engineering"]
+      },
+      "open_source": {
+        "name": "开源工具",
+        "limit": 3,
+        "categories": ["ai-agents", "local-ai", "ai-open-source", "ai-inference", "ai-discovery"]
       }
     },
-    "headers": ""
+    "default_group": "other",
+    "default_group_limit": 1
   }
 }

@@ -134,6 +134,35 @@ def test_successful_fetch_returns_items(monkeypatch):
     assert result[0].metadata["favorite_count"] == 10
 
 
+def test_fetch_respects_limit_after_skipping_unparseable_items(monkeypatch):
+    monkeypatch.setenv("APIFY_TOKEN", "test_token")
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    tweets = [
+        {"id_str": "invalid"},
+        _tweet("1"),
+        _tweet("2"),
+        _tweet("3"),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/runs" in request.url.path and request.method == "POST":
+            return httpx.Response(200, json=_run_resp())
+        if "/actor-runs/" in request.url.path:
+            return httpx.Response(200, json=_status_resp())
+        if "/datasets/" in request.url.path:
+            return httpx.Response(200, json=tweets)
+        raise AssertionError(f"Unexpected: {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport)
+    result = asyncio.run(
+        TwitterScraper(_make_config(fetch_limit=2), client).fetch(since)
+    )
+    asyncio.run(client.aclose())
+
+    assert [item.id for item in result] == ["twitter:tweet:1", "twitter:tweet:2"]
+
+
 def test_metadata_keys_aligned_for_analyzer(monkeypatch):
     """Analyzer reads favorite_count/retweet_count/reply_count — verify they are set."""
     monkeypatch.setenv("APIFY_TOKEN", "test_token")
@@ -161,6 +190,25 @@ def test_metadata_keys_aligned_for_analyzer(monkeypatch):
     assert meta["reply_count"] == 3
     assert meta["tweet_id"] == "42"
     assert "conversation_id" in meta
+
+
+def test_scweet_prefixed_id_uses_numeric_status_url():
+    now = datetime.now(timezone.utc)
+    item = _tweet("unused")
+    item.pop("id_str")
+    item["id"] = "tweet-42"
+
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json=[]))
+    client = httpx.AsyncClient(transport=transport)
+    parsed = TwitterScraper(_make_config(), client)._parse_item(
+        item,
+        now - timedelta(hours=1),
+    )
+    asyncio.run(client.aclose())
+
+    assert parsed is not None
+    assert str(parsed.url) == "https://twitter.com/karpathy/status/42"
+    assert parsed.metadata["tweet_id"] == "42"
 
 
 def test_filters_old_tweets(monkeypatch):
@@ -415,6 +463,3 @@ def test_fetch_replies_no_conversation_id_returns_empty(monkeypatch):
     result = asyncio.run(scraper.fetch_replies_for_item(item))
     asyncio.run(client.aclose())
     assert result == []
-
-
-

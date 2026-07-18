@@ -2,14 +2,22 @@ name: Daily Horizon Summary
 
 on:
   schedule:
-    # GitHub scheduled workflows use UTC. 20:00 UTC is 04:00 Asia/Shanghai;
-    # this intentionally runs early to offset the observed schedule delay.
-    - cron: '0 23 * * *'
+    - cron: '17 7 * * *'
+      timezone: 'Asia/Shanghai'
+    - cron: '47 9 * * *'
+      timezone: 'Asia/Shanghai'
   workflow_dispatch:      # Allow manual trigger
+
+concurrency:
+  group: horizon-daily-summary
+  cancel-in-progress: false
 
 jobs:
   daily-summary:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Shanghai
     permissions:
       contents: write  # Needed to commit changes
 
@@ -17,38 +25,57 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Check whether today's summary already exists
+        id: daily_guard
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          SUMMARY_DATE="$(TZ=Asia/Shanghai date +'%Y-%m-%d')"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch --quiet --depth=1 origin gh-pages
+            if git cat-file -e "FETCH_HEAD:_posts/${SUMMARY_DATE}-summary-zh.md" 2>/dev/null; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Summary ${SUMMARY_DATE} already exists; skipping this retry."
+            fi
+          fi
+
       - name: Set up Python
+        if: steps.daily_guard.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install uv
+        if: steps.daily_guard.outputs.skip != 'true'
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.26"
 
       - name: Install dependencies
+        if: steps.daily_guard.outputs.skip != 'true'
         run: uv sync
 
       - name: Prepare GitHub Actions config
+        if: steps.daily_guard.outputs.skip != 'true'
         run: cp data/config.github.json data/config.json
 
       - name: Run Horizon
+        if: steps.daily_guard.outputs.skip != 'true'
         env:
           # Map secrets to environment variables expected by config.json
           # Modify these based on your data/config.github.json provider settings
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          LWN_KEY: ${{ secrets.LWN_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: uv run horizon --hours 24
 
       - name: Set current date as environment variable
+        if: steps.daily_guard.outputs.skip != 'true'
         run: echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
       - name: Deploy to GitHub Pages
+        if: steps.daily_guard.outputs.skip != 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
