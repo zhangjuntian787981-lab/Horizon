@@ -95,12 +95,14 @@ class GoogleNewsScraper(BaseScraper):
             feed = feedparser.parse(response.text)
 
             items: List[ContentItem] = []
+            since_utc = self._ensure_utc(since)
             for entry in feed.entries:
                 if len(items) >= self.gn_config.max_results:
                     break
                 item = self._entry_to_item(entry)
-                if item is not None:
-                    items.append(item)
+                if item is None or item.published_at < since_utc:
+                    continue
+                items.append(item)
             return items
 
         except httpx.HTTPError as exc:
