@@ -22,8 +22,8 @@ jobs:
       contents: write  # Needed to commit changes
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - name: Checkout Horizon
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Check whether today's summary already exists
         id: daily_guard
@@ -31,12 +31,13 @@ jobs:
         shell: bash
         run: |
           SUMMARY_DATE="$(TZ=Asia/Shanghai date +'%Y-%m-%d')"
-          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
-            git fetch --quiet --depth=1 origin gh-pages
-            if git cat-file -e "FETCH_HEAD:_posts/${SUMMARY_DATE}-summary-zh.md" 2>/dev/null; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "Summary ${SUMMARY_DATE} already exists; skipping this retry."
-            fi
+          GUARD_DIR="$RUNNER_TEMP/horizon-daily-guard"
+          git clone --quiet --depth=1 \
+            https://github.com/zhangjuntian787981-lab/Horizon-Daily.git \
+            "$GUARD_DIR"
+          if [[ -f "$GUARD_DIR/${SUMMARY_DATE} AI 信息日报.md" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Obsidian daily note ${SUMMARY_DATE} already exists; skipping."
           fi
 
       - name: Set up Python
@@ -68,6 +69,7 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          HORIZON_OBSIDIAN_OUTPUT_DIR: ${{ runner.temp }}/obsidian-output
         run: uv run horizon --hours 24
 
       - name: Set current date as environment variable
@@ -84,3 +86,29 @@ jobs:
           commit_message: "📝 Daily Summary: ${{ env.DATE }}"
           publish_branch: gh-pages
           enable_jekyll: true
+
+      - name: Checkout Obsidian daily repository for publish
+        if: steps.daily_guard.outputs.skip != 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: zhangjuntian787981-lab/Horizon-Daily
+          path: obsidian-daily
+          ssh-key: ${{ secrets.OBSIDIAN_DAILY_DEPLOY_KEY }}
+
+      - name: Commit Obsidian daily note
+        if: steps.daily_guard.outputs.skip != 'true'
+        run: |
+          cp \
+            "$RUNNER_TEMP/obsidian-output/${DATE} AI 信息日报.md" \
+            "obsidian-daily/${DATE} AI 信息日报.md"
+          uv run python -c \
+            'from pathlib import Path; from src.storage.manager import StorageManager; StorageManager._save_obsidian_daily_index(Path("obsidian-daily"))'
+          git -C obsidian-daily config user.name "github-actions[bot]"
+          git -C obsidian-daily config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C obsidian-daily add -- "${DATE} AI 信息日报.md" "00-日报索引.md"
+          if git -C obsidian-daily diff --cached --quiet; then
+            echo "No Obsidian daily note changes to commit."
+          else
+            git -C obsidian-daily commit -m "Daily AI briefing: ${DATE}"
+            git -C obsidian-daily push origin main
+          fi

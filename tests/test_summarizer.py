@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from src.ai.summarizer import DailySummarizer
-from src.models import ContentItem, SourceType
+from src.models import CategoryGroupConfig, ContentItem, SourceType
 
 
 def _run_async(coro):
@@ -25,6 +25,131 @@ def _make_item(idx: int) -> ContentItem:
     item.ai_summary = f"Summary for item {idx}."
     item.ai_tags = ["AI", "News"]
     return item
+
+
+def _category_groups():
+    return {
+        "official": CategoryGroupConfig(
+            name="官方 AI 动态",
+            limit=2,
+            categories=["official-ai"],
+        ),
+        "research": CategoryGroupConfig(
+            name="研究与前沿信号",
+            limit=2,
+            categories=["ai-research"],
+        ),
+        "practice": CategoryGroupConfig(
+            name="实践案例",
+            limit=3,
+            categories=["ai-cases"],
+        ),
+        "open_source": CategoryGroupConfig(
+            name="开源工具",
+            limit=3,
+            categories=["ai-open-source"],
+        ),
+    }
+
+
+def test_generate_obsidian_note_uses_fixed_schema_and_category_sections():
+    summarizer = DailySummarizer()
+    item = _make_item(1)
+    item.metadata["category"] = "ai-research"
+
+    result = summarizer.generate_obsidian_note(
+        [item],
+        date="2026-07-19",
+        total_fetched=10,
+        category_groups=_category_groups(),
+    )
+
+    assert result.startswith("---\ntype: ai_daily_briefing\ndate: 2026-07-19")
+    assert "status: complete" in result
+    assert "selected_count: 1" in result
+    assert "| 研究与前沿信号 | 1 |" in result
+    assert "| 官方 AI 动态 | 0 |" in result
+    for heading in (
+        "## 官方 AI 动态",
+        "## 研究与前沿信号",
+        "## 实践案例",
+        "## 开源工具",
+        "## 其他",
+        "## 知识库处理",
+        "## 运行说明",
+    ):
+        assert heading in result
+    assert "- **参考资料**: 暂无" in result
+    assert "[[每日信息日报/00-日报索引|每日信息日报索引]]" in result
+    assert "[[Wiki/index|知识库索引]]" in result
+
+
+def test_generate_empty_obsidian_note_keeps_the_same_sections():
+    summarizer = DailySummarizer()
+
+    result = summarizer.generate_obsidian_note(
+        [],
+        date="2026-07-19",
+        total_fetched=0,
+        category_groups=_category_groups(),
+    )
+
+    assert "status: no_significant_updates" in result
+    assert "selected_count: 0" in result
+    assert result.count("本类今日无入选条目。") == 5
+    assert "## 官方 AI 动态" in result
+    assert "## 其他" in result
+
+
+def test_generate_obsidian_note_uses_configured_default_group_and_fallback_name():
+    summarizer = DailySummarizer()
+    item = _make_item(1)
+    item.metadata["category"] = "unmapped"
+    groups = {
+        "official": CategoryGroupConfig(
+            name=None,
+            limit=1,
+            categories=["official-ai"],
+        )
+    }
+
+    result = summarizer.generate_obsidian_note(
+        [item],
+        date="2026-07-19",
+        total_fetched=1,
+        category_groups=groups,
+        default_group="misc",
+    )
+
+    assert "## official" in result
+    assert "## misc" in result
+    assert "| misc | 1 |" in result
+
+
+def test_generate_obsidian_note_flattens_multiline_item_fields():
+    summarizer = DailySummarizer()
+    item = _make_item(1)
+    item.metadata.update(
+        {
+            "category": "ai-research",
+            "detailed_summary_zh": "摘要第一行\n摘要第二行",
+            "background_zh": "背景第一行\n背景第二行",
+            "community_discussion_zh": "讨论第一行\n讨论第二行",
+        }
+    )
+    item.ai_reason = "理由第一行\n理由第二行"
+
+    result = summarizer.generate_obsidian_note(
+        [item],
+        date="2026-07-19",
+        total_fetched=1,
+        category_groups=_category_groups(),
+    )
+
+    assert "- **摘要**: 摘要第一行 摘要第二行" in result
+    assert "- **入选理由**: 理由第一行 理由第二行" in result
+    assert "- **背景**: 背景第一行 背景第二行" in result
+    assert "- **社区讨论**: 讨论第一行 讨论第二行" in result
 
 
 def test_generate_webhook_overview_lists_items_without_full_details():

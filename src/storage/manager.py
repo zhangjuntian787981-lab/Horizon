@@ -127,6 +127,58 @@ class StorageManager:
 
         return filepath
 
+    def save_obsidian_daily_note(
+        self,
+        output_dir: str,
+        date: str,
+        markdown: str,
+    ) -> Path:
+        """Save one dated Obsidian note and refresh its Markdown index."""
+        root = Path(output_dir).expanduser()
+        root.mkdir(parents=True, exist_ok=True)
+        filepath = safe_output_path(root, f"{date} AI 信息日报.md")
+        _atomic_write_text(filepath, markdown)
+        self._save_obsidian_daily_index(root)
+        return filepath
+
+    @staticmethod
+    def _save_obsidian_daily_index(root: Path) -> None:
+        report_name = re.compile(r"^\d{4}-\d{2}-\d{2} AI 信息日报\.md$")
+        reports = sorted(
+            (path for path in root.glob("*.md") if report_name.fullmatch(path.name)),
+            reverse=True,
+        )
+        report_links = [
+            f"- [[每日信息日报/{path.stem}|{path.name[:10]}]]"
+            for path in reports
+        ]
+        index = "\n".join(
+            [
+                "---",
+                "type: ai_daily_index",
+                "source: Horizon",
+                "tags:",
+                "  - AI日报",
+                "  - 信息知识库",
+                "---",
+                "",
+                "# 每日信息日报索引",
+                "",
+                "> 本目录由 Horizon 自动更新。每篇日报使用同一模板，并按日期倒序排列。",
+                "",
+                "## 日报列表",
+                "",
+                *(report_links or ["暂无日报。"]),
+                "",
+                "## 知识库导航",
+                "",
+                "- [[Wiki/index|知识库索引]]",
+                "- [[System/知识库迭代机制 v2.0|知识库迭代机制]]",
+                "",
+            ]
+        )
+        _atomic_write_text(safe_output_path(root, "00-日报索引.md"), index)
+
     def load_subscribers(self) -> list:
         """Loads the list of email subscribers."""
         subscribers_path = self.data_dir / "subscribers.json"

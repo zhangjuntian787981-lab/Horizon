@@ -5,7 +5,7 @@ import re
 from typing import Dict, List, Optional
 from urllib.parse import quote, urlsplit
 
-from ..models import ContentItem
+from ..models import CategoryGroupConfig, ContentItem
 
 
 _CJK = r"[\u4e00-\u9fff\u3400-\u4dbf]"
@@ -43,6 +43,11 @@ def _pangu(text: str) -> str:
     text = re.sub(rf"({_CJK})({_ASCII})", r"\1 \2", text)
     text = re.sub(rf"({_ASCII})({_CJK})", r"\1 \2", text)
     return text
+
+
+def _inline_markdown(value: object) -> str:
+    """Escape untrusted text and collapse it to one Markdown-safe line."""
+    return re.sub(r"\s+", " ", _escape_markdown(value)).strip()
 
 
 LABELS = {
@@ -140,6 +145,169 @@ class DailySummarizer:
         parts = [self._format_item(item, labels, language, i + 1) for i, item in enumerate(items)]
 
         return header + toc + "".join(parts)
+
+    def generate_obsidian_note(
+        self,
+        items: List[ContentItem],
+        date: str,
+        total_fetched: int,
+        category_groups: Dict[str, CategoryGroupConfig],
+        default_group: str = "other",
+    ) -> str:
+        """Generate a fixed-schema Chinese daily note for an Obsidian vault."""
+        grouped_items: Dict[str, List[ContentItem]] = {
+            key: [] for key in category_groups
+        }
+        grouped_items.setdefault(default_group, [])
+
+        category_to_group: Dict[str, str] = {}
+        for group_key, group in category_groups.items():
+            for category in group.categories:
+                category_to_group.setdefault(category, group_key)
+
+        for item in items:
+            category = item.metadata.get("category")
+            group_key = (
+                category_to_group.get(category, default_group)
+                if isinstance(category, str)
+                else default_group
+            )
+            grouped_items[group_key].append(item)
+
+        sections = [
+            (key, group.name or key, grouped_items[key])
+            for key, group in category_groups.items()
+        ]
+        if default_group not in category_groups:
+            default_group_name = "其他" if default_group == "other" else default_group
+            sections.append(
+                (default_group, default_group_name, grouped_items[default_group])
+            )
+
+        status = "complete" if items else "no_significant_updates"
+        lines = [
+            "---",
+            "type: ai_daily_briefing",
+            f"date: {date}",
+            f"status: {status}",
+            "source: Horizon",
+            f"total_fetched: {total_fetched}",
+            f"selected_count: {len(items)}",
+            "tags:",
+            "  - AI日报",
+            "  - 信息知识库",
+            "---",
+            "",
+            f"# {date} AI 信息日报",
+            "",
+            "> [!summary] 今日概览",
+            f"> 今日共采集 {total_fetched} 条信息，筛选出 {len(items)} 条重点资讯。",
+            "",
+            "- 日报索引：[[每日信息日报/00-日报索引|每日信息日报索引]]",
+            "- 知识库索引：[[Wiki/index|知识库索引]]",
+            "",
+            "## 分类概览",
+            "",
+            "| 分类 | 条目数 |",
+            "|---|---:|",
+        ]
+
+        for _, name, group_items in sections:
+            lines.append(f"| {_inline_markdown(name)} | {len(group_items)} |")
+
+        for _, name, group_items in sections:
+            lines.extend(["", f"## {_inline_markdown(name)}", ""])
+            if not group_items:
+                lines.append("本类今日无入选条目。")
+                continue
+            for item in group_items:
+                lines.extend(self._format_obsidian_item(item))
+
+        lines.extend(
+            [
+                "",
+                "## 知识库处理",
+                "",
+                "- [ ] 将值得长期跟踪的结论沉淀到 [[Wiki/index|知识库]]",
+                "- [ ] 对社区观点或未验证信息进行交叉验证",
+                "",
+                "## 运行说明",
+                "",
+                "- 本日报由 Horizon 自动生成，原始链接保留在每条资讯中。",
+                "- 评分与摘要用于信息筛选，不代表事实已经完成独立验证。",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _format_obsidian_item(self, item: ContentItem) -> List[str]:
+        """Format one item with every field required by the Obsidian schema."""
+        meta = item.metadata
+        title = _pangu(_inline_markdown(meta.get("title_zh") or item.title))
+        url = _safe_url(item.url)
+        title_link = f"[{title}]({url})" if url else title
+
+        summary = (
+            meta.get("detailed_summary_zh")
+            or meta.get("detailed_summary")
+            or item.ai_summary
+            or "暂无"
+        )
+        reason = item.ai_reason or "暂无"
+        background = meta.get("background_zh") or meta.get("background") or "暂无"
+        discussion = (
+            meta.get("community_discussion_zh")
+            or meta.get("community_discussion")
+            or "暂无"
+        )
+
+        source_name = meta.get("feed_name") or item.author or "unknown"
+        source_parts = [
+            _inline_markdown(item.source_type.value),
+            _inline_markdown(source_name),
+        ]
+        if item.published_at:
+            source_parts.append(
+                f"{item.published_at.month}月{item.published_at.day}日 "
+                f"{item.published_at:%H:%M}"
+            )
+        source_line = " · ".join(source_parts)
+        if url:
+            source_line += f" · [原文]({url})"
+
+        tags = (
+            ", ".join(f"`#{_inline_markdown(tag)}`" for tag in item.ai_tags)
+            if item.ai_tags
+            else "暂无"
+        )
+        lines = [
+            f"### {title_link}",
+            "",
+            f"- **评分**: {item.ai_score if item.ai_score is not None else '?'}/10",
+            f"- **摘要**: {_pangu(_inline_markdown(summary))}",
+            f"- **入选理由**: {_pangu(_inline_markdown(reason))}",
+            f"- **来源**: {source_line}",
+            f"- **背景**: {_pangu(_inline_markdown(background))}",
+            f"- **社区讨论**: {_pangu(_inline_markdown(discussion))}",
+        ]
+
+        references = meta.get("sources") or []
+        if references:
+            lines.append("- **参考资料**:")
+            for reference in references:
+                reference_title = _inline_markdown(
+                    reference.get("title") or "未命名来源"
+                )
+                reference_url = _safe_url(reference.get("url", ""))
+                if reference_url:
+                    lines.append(f"  - [{reference_title}]({reference_url})")
+                else:
+                    lines.append(f"  - {reference_title}")
+        else:
+            lines.append("- **参考资料**: 暂无")
+
+        lines.extend([f"- **标签**: {tags}", ""])
+        return lines
 
     def generate_webhook_overview(
         self,

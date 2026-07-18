@@ -171,6 +171,33 @@ def test_save_daily_summary_replace_failure_preserves_destination(tmp_path, monk
     assert list(destination.parent.glob(f".{destination.name}.*.tmp")) == []
 
 
+def test_save_obsidian_daily_note_updates_index_without_duplicates(tmp_path):
+    storage = StorageManager(data_dir=str(tmp_path / "data"))
+    output_dir = tmp_path / "每日信息日报"
+
+    first = storage.save_obsidian_daily_note(
+        str(output_dir),
+        "2026-07-18",
+        "first",
+    )
+    latest = storage.save_obsidian_daily_note(
+        str(output_dir),
+        "2026-07-19",
+        "latest",
+    )
+    storage.save_obsidian_daily_note(
+        str(output_dir),
+        "2026-07-19",
+        "updated",
+    )
+
+    index = (output_dir / "00-日报索引.md").read_text(encoding="utf-8")
+    assert first.name == "2026-07-18 AI 信息日报.md"
+    assert latest.read_text(encoding="utf-8") == "updated"
+    assert index.count("2026-07-19") == 2
+    assert index.index("2026-07-19") < index.index("2026-07-18")
+
+
 def test_save_subscribers_replace_failure_preserves_destination(tmp_path, monkeypatch):
     storage = StorageManager(data_dir=str(tmp_path))
 

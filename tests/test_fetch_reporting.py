@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from io import StringIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from rich.console import Console
@@ -141,15 +141,25 @@ def test_native_run_raises_when_every_attempted_source_failed(monkeypatch) -> No
     send_failure.assert_awaited_once()
 
 
-def test_native_run_treats_all_success_empty_as_no_content(monkeypatch) -> None:
+def test_native_run_writes_empty_daily_outputs(monkeypatch, tmp_path) -> None:
     orchestrator = make_orchestrator()
     orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
         email=None,
-        filtering=SimpleNamespace(time_window_hours=24),
+        ai=SimpleNamespace(languages=["zh"]),
+        filtering=SimpleNamespace(
+            time_window_hours=24,
+            category_groups={},
+            default_group="other",
+        ),
     )
     orchestrator.email_manager = None
-    send_failure = AsyncMock()
-    orchestrator.webhook_notifier = SimpleNamespace(send_failure=send_failure)  # type: ignore[assignment]
+    orchestrator.webhook_notifier = None
+    summary_path = tmp_path / "summary.md"
+    obsidian_path = tmp_path / "每日信息日报" / "daily.md"
+    orchestrator.storage = SimpleNamespace(  # type: ignore[assignment]
+        save_daily_summary=Mock(return_value=summary_path),
+        save_obsidian_daily_note=Mock(return_value=obsidian_path),
+    )
 
     async def fetch_all_sources(since):  # type: ignore[no-untyped-def]
         orchestrator.last_fetch_report = FetchReport(
@@ -158,7 +168,54 @@ def test_native_run_treats_all_success_empty_as_no_content(monkeypatch) -> None:
         return []
 
     monkeypatch.setattr(orchestrator, "fetch_all_sources", fetch_all_sources)
+    monkeypatch.setenv(
+        "HORIZON_OBSIDIAN_OUTPUT_DIR",
+        str(tmp_path / "每日信息日报"),
+    )
+    monkeypatch.chdir(tmp_path)
 
     asyncio.run(orchestrator.run())
 
-    send_failure.assert_not_awaited()
+    orchestrator.storage.save_daily_summary.assert_called_once()
+    obsidian_call = orchestrator.storage.save_obsidian_daily_note.call_args
+    assert obsidian_call.args[0] == str(tmp_path / "每日信息日报")
+    assert "status: no_significant_updates" in obsidian_call.args[2]
+    assert list((tmp_path / "docs" / "_posts").glob("*-summary-zh.md"))
+
+
+def test_native_run_retries_when_partial_failure_returns_no_items(monkeypatch) -> None:
+    orchestrator = make_orchestrator()
+    orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
+        email=None,
+        filtering=SimpleNamespace(time_window_hours=24),
+    )
+    orchestrator.email_manager = None
+    orchestrator.webhook_notifier = None
+    orchestrator.storage = SimpleNamespace(  # type: ignore[assignment]
+        save_daily_summary=Mock(),
+        save_obsidian_daily_note=Mock(),
+    )
+
+    async def fetch_all_sources(since):  # type: ignore[no-untyped-def]
+        orchestrator.last_fetch_report = FetchReport(
+            [
+                SourceFetchOutcome("RSS Feeds", "empty"),
+                SourceFetchOutcome(
+                    "Twitter",
+                    "failure",
+                    error="TimeoutError: slow",
+                ),
+            ]
+        )
+        return []
+
+    monkeypatch.setattr(orchestrator, "fetch_all_sources", fetch_all_sources)
+
+    with pytest.raises(
+        RuntimeError,
+        match="No content was fetched while 1/2 sources failed",
+    ):
+        asyncio.run(orchestrator.run())
+
+    orchestrator.storage.save_daily_summary.assert_not_called()
+    orchestrator.storage.save_obsidian_daily_note.assert_not_called()

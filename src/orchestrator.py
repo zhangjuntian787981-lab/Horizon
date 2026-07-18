@@ -1,6 +1,7 @@
 """Main orchestrator coordinating the entire workflow."""
 
 import asyncio
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -226,45 +227,54 @@ class HorizonOrchestrator:
                 raise RuntimeError(self.last_fetch_report.failure_message())
 
             if not all_items:
-                self.console.print("[yellow]No new content found. Exiting.[/yellow]")
-                return
-
-            # 3. Merge cross-source duplicates (same URL from different sources)
-            merged_items = self.merge_cross_source_duplicates(all_items)
-            if len(merged_items) < len(all_items):
+                if self.last_fetch_report and self.last_fetch_report.failed_count:
+                    raise RuntimeError(
+                        "No content was fetched while "
+                        f"{self.last_fetch_report.failed_count}/"
+                        f"{len(self.last_fetch_report.outcomes)} sources failed; "
+                        "refusing to publish an incomplete empty daily note."
+                    )
                 self.console.print(
-                    f"🔗 Merged {len(all_items) - len(merged_items)} cross-source duplicates "
-                    f"→ {len(merged_items)} unique items\n"
+                    "[yellow]No new content found. Generating an empty daily note.[/yellow]"
                 )
+                important_items = []
+            else:
+                # 3. Merge cross-source duplicates (same URL from different sources)
+                merged_items = self.merge_cross_source_duplicates(all_items)
+                if len(merged_items) < len(all_items):
+                    self.console.print(
+                        f"🔗 Merged {len(all_items) - len(merged_items)} cross-source duplicates "
+                        f"→ {len(merged_items)} unique items\n"
+                    )
 
-            # 4. Analyze with AI
-            analyzed_items = await self._analyze_content(merged_items)
-            self.console.print(f"🤖 Analyzed {len(analyzed_items)} items with AI\n")
+                # 4. Analyze with AI
+                analyzed_items = await self._analyze_content(merged_items)
+                self.console.print(f"🤖 Analyzed {len(analyzed_items)} items with AI\n")
 
-            # 5. Filter, deduplicate, and balance the digest
-            filtering_result = await self.filter_items(
-                analyzed_items,
-                apply_balance=False,
-            )
-            important_items = filtering_result.items
+                # 5. Filter, deduplicate, and balance the digest
+                filtering_result = await self.filter_items(
+                    analyzed_items,
+                    apply_balance=False,
+                )
+                important_items = filtering_result.items
 
-            # 5.5 Optional second-stage Twitter reply expansion + targeted re-analysis
-            await self._expand_twitter_discussion(important_items)
+                # 5.5 Optional second-stage Twitter reply expansion + targeted re-analysis
+                await self._expand_twitter_discussion(important_items)
 
-            # 5.6 Apply digest limits after any targeted re-analysis changes scores.
-            important_items = self.apply_balanced_digest(important_items).items
+                # 5.6 Apply digest limits after any targeted re-analysis changes scores.
+                important_items = self.apply_balanced_digest(important_items).items
 
-            # Show per-sub-source selection breakdown
-            selected_counts: Dict[str, int] = defaultdict(int)
-            for item in important_items:
-                key = f"{item.source_type.value}/{self._sub_source_label(item)}"
-                selected_counts[key] += 1
-            for source_key, count in sorted(selected_counts.items()):
-                self.console.print(f"      • {source_key}: {count}")
-            self.console.print("")
+                # Show per-sub-source selection breakdown
+                selected_counts: Dict[str, int] = defaultdict(int)
+                for item in important_items:
+                    key = f"{item.source_type.value}/{self._sub_source_label(item)}"
+                    selected_counts[key] += 1
+                for source_key, count in sorted(selected_counts.items()):
+                    self.console.print(f"      • {source_key}: {count}")
+                self.console.print("")
 
-            # 6. Search related stories + enrich with background knowledge (2nd AI pass)
-            await self._enrich_important_items(important_items)
+                # 6. Search related stories + enrich with background knowledge (2nd AI pass)
+                await self._enrich_important_items(important_items)
 
             # 7. Generate and save daily summaries for each configured language
             today = _summary_date()
@@ -275,6 +285,24 @@ class HorizonOrchestrator:
                 # Save to data/summaries/
                 summary_path = self.storage.save_daily_summary(today, summary, language=lang)
                 self.console.print(f"💾 Saved {lang.upper()} summary to: {summary_path}\n")
+
+                obsidian_output_dir = os.getenv("HORIZON_OBSIDIAN_OUTPUT_DIR")
+                if lang == "zh" and obsidian_output_dir:
+                    obsidian_note = summarizer.generate_obsidian_note(
+                        important_items,
+                        today,
+                        len(all_items),
+                        self.config.filtering.category_groups,
+                        self.config.filtering.default_group,
+                    )
+                    obsidian_path = self.storage.save_obsidian_daily_note(
+                        obsidian_output_dir,
+                        today,
+                        obsidian_note,
+                    )
+                    self.console.print(
+                        f"📔 Saved Obsidian daily note to: {obsidian_path}\n"
+                    )
 
                 # Copy to docs/ for GitHub Pages
                 try:
