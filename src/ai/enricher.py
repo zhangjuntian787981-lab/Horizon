@@ -27,8 +27,9 @@ from ..models import ContentItem
 class ContentEnricher:
     """Enriches high-scoring content items with background knowledge."""
 
-    def __init__(self, ai_client: AIClient):
+    def __init__(self, ai_client: AIClient, curation_focus: Optional[str] = None):
         self.client = ai_client
+        self.curation_focus = curation_focus.strip() if curation_focus else None
 
     def _get_concurrency(self) -> int:
         """Return the configured enrichment concurrency, clamped to 1 or above."""
@@ -185,8 +186,16 @@ class ContentEnricher:
             web_context=web_context or "No web search results available.",
         )
 
+        system_prompt = CONTENT_ENRICHMENT_SYSTEM
+        if self.curation_focus:
+            system_prompt += (
+                "\n\nCollection focus:\n"
+                f"{self.curation_focus}\n"
+                "Emphasize decision-relevant implications and quantitative evidence for this focus."
+            )
+
         response = await self.client.complete(
-            system=CONTENT_ENRICHMENT_SYSTEM,
+            system=system_prompt,
             user=user_prompt,
         )
 

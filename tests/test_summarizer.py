@@ -3,6 +3,8 @@
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from src.ai.summarizer import DailySummarizer
 from src.models import CategoryGroupConfig, ContentItem, SourceType
 
@@ -99,6 +101,55 @@ def test_generate_empty_obsidian_note_keeps_the_same_sections():
     assert result.count("本类今日无入选条目。") == 5
     assert "## 官方 AI 动态" in result
     assert "## 其他" in result
+
+
+def test_generate_ecommerce_obsidian_note_uses_fixed_profile():
+    summarizer = DailySummarizer()
+    item = _make_item(1)
+    item.metadata["category"] = "ecommerce-platform"
+    groups = {
+        "platform": CategoryGroupConfig(
+            name="平台规则与行业动态",
+            limit=2,
+            categories=["ecommerce-platform"],
+        ),
+        "ai_tools": CategoryGroupConfig(
+            name="AI 电商工具与自动化",
+            limit=2,
+            categories=["ai-commerce"],
+        ),
+    }
+
+    result = summarizer.generate_obsidian_note(
+        [item],
+        date="2026-07-19",
+        total_fetched=5,
+        category_groups=groups,
+        report_profile="ecommerce",
+    )
+
+    assert result.startswith("---\ntype: ecommerce_daily_briefing\ndate: 2026-07-19")
+    assert "# 2026-07-19 电商运营日报" in result
+    assert "今日共采集 5 条电商运营相关信息" in result
+    assert "[[每日电商运营日报/00-日报索引|每日电商运营日报索引]]" in result
+    assert "## 平台规则与行业动态" in result
+    assert "## AI 电商工具与自动化" in result
+    assert "- [ ] 对平台政策、数据指标和案例结论进行交叉验证" in result
+    assert "  - 电商日报" in result
+    assert "  - AI电商" in result
+
+
+def test_generate_obsidian_note_rejects_unknown_profile():
+    summarizer = DailySummarizer()
+
+    with pytest.raises(ValueError, match="Unsupported Obsidian daily profile"):
+        summarizer.generate_obsidian_note(
+            [],
+            date="2026-07-19",
+            total_fetched=0,
+            category_groups=_category_groups(),
+            report_profile="unknown",
+        )
 
 
 def test_generate_obsidian_note_uses_configured_default_group_and_fallback_name():

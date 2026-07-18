@@ -121,6 +121,32 @@ def test_analyze_item_accepts_valid_result():
     assert item.ai_tags == ["ai", "research"]
 
 
+def test_analyze_item_appends_curation_focus_to_system_prompt():
+    captured = {}
+
+    async def complete(**kwargs):
+        captured.update(kwargs)
+        return json.dumps(
+            {
+                "score": 8.0,
+                "reason": "Actionable for merchants",
+                "summary": "A marketplace policy changed",
+                "tags": ["ecommerce"],
+            }
+        )
+
+    item = _make_item("rss:test:ecommerce")
+    analyzer = ContentAnalyzer(
+        SimpleNamespace(complete=complete),
+        "Prioritize ecommerce operations and measurable merchant impact.",
+    )
+
+    asyncio.run(analyzer._analyze_item(item))
+
+    assert "Prioritize ecommerce operations" in captured["system"]
+    assert "Score content outside this focus as low priority" in captured["system"]
+
+
 @pytest.mark.parametrize(
     "result",
     [
