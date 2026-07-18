@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -178,3 +179,26 @@ def test_max_results_cap() -> None:
     items = asyncio.run(scraper.fetch(_now() - timedelta(days=365)))
 
     assert len(items) == 2
+
+
+def test_stale_results_are_filtered_even_when_google_returns_them() -> None:
+    now = _now()
+    stale = format_datetime(now - timedelta(days=30))
+    recent = format_datetime(now - timedelta(hours=1))
+    items_xml = _item(
+        "Stale - Publisher",
+        "https://example.com/stale",
+        pub=stale,
+    ) + _item(
+        "Recent - Publisher",
+        "https://example.com/recent",
+        pub=recent,
+    )
+    client = _mock_client(_feed(items_xml))
+    config = GoogleNewsConfig(enabled=True, query="ai", max_results=1)
+    scraper = GoogleNewsScraper(config, client)
+
+    items = asyncio.run(scraper.fetch(now - timedelta(hours=24)))
+
+    assert len(items) == 1
+    assert str(items[0].url) == "https://example.com/recent"
